@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm test
@@ -83,7 +83,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - uses: aws-actions/configure-aws-credentials@v4
@@ -122,7 +122,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - uses: aws-actions/configure-aws-credentials@v4
