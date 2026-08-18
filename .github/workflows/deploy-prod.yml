@@ -1,0 +1,49 @@
+name: Deploy Prod
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-primary:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.3
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::222222222222:role/GitHubActions-Deploy-Prod
+          aws-region: us-east-1
+      - run: pnpm exec cdk deploy ProductionPrimary/Network --require-approval never
+
+  deploy-secondary:
+    runs-on: ubuntu-latest
+    environment: production
+    needs: deploy-primary
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.3
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::222222222222:role/GitHubActions-Deploy-Prod
+          aws-region: us-west-2
+      - run: pnpm exec cdk deploy ProductionSecondary/Network --require-approval never
