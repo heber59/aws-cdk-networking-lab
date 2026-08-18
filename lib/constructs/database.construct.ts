@@ -22,7 +22,7 @@ export class DatabaseConstruct extends Construct {
 
     this.appDatabaseSecurityGroup = new ec2.SecurityGroup(this, 'AppDatabaseSecurityGroup', {
       vpc: props.vpc,
-      description: 'Allows private app nodes to reach the app database',
+      description: 'Allows private backend nodes to reach the app database',
       allowAllOutbound: true,
     });
     this.appDatabaseSecurityGroup.addIngressRule(

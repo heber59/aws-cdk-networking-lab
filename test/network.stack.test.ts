@@ -21,7 +21,7 @@ describe('NetworkStack', () => {
     template.resourceCountIs('AWS::EC2::Subnet', 6);
     template.resourceCountIs('AWS::EC2::NatGateway', 1);
     template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
-    template.resourceCountIs('AWS::AutoScaling::AutoScalingGroup', 1);
+    template.resourceCountIs('AWS::AutoScaling::AutoScalingGroup', 2);
     template.resourceCountIs('AWS::RDS::DBCluster', 1);
     template.resourceCountIs('AWS::RDS::DBInstance', 3);
   });
@@ -40,16 +40,27 @@ describe('NetworkStack', () => {
     });
   });
 
-  test('keeps application instances private and behind the target group', () => {
+  test('keeps frontend and backend instances private and behind target groups', () => {
     const template = synthTemplate();
 
     template.hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
-      MinSize: '2',
-      DesiredCapacity: '2',
+      MinSize: '1',
+      DesiredCapacity: '1',
       MaxSize: '3',
       TargetGroupARNs: Match.arrayWith([
         {
-          Ref: Match.stringLikeRegexp('AppTierAlbHttpListenerAppTargetsGroup'),
+          Ref: Match.stringLikeRegexp('AppTierAlbHttpListenerFrontendTargetsGroup'),
+        },
+      ]),
+    });
+
+    template.hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      MinSize: '1',
+      DesiredCapacity: '1',
+      MaxSize: '3',
+      TargetGroupARNs: Match.arrayWith([
+        {
+          Ref: Match.stringLikeRegexp('AppTierAlbHttpListenerBackendTargetsGroup'),
         },
       ]),
     });
@@ -59,8 +70,29 @@ describe('NetworkStack', () => {
       Matcher: {
         HttpCode: '200',
       },
-      Port: 80,
+      Port: 3100,
       Protocol: 'HTTP',
+    });
+
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
+      HealthCheckPath: '/health',
+      Matcher: {
+        HttpCode: '200',
+      },
+      Port: 5100,
+      Protocol: 'HTTP',
+    });
+
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
+      Conditions: Match.arrayWith([
+        {
+          Field: 'path-pattern',
+          PathPatternConfig: {
+            Values: ['/api/*'],
+          },
+        },
+      ]),
+      Priority: 10,
     });
   });
 
@@ -81,11 +113,19 @@ describe('NetworkStack', () => {
     });
 
     template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
-      Description: 'HTTP from ALB',
-      FromPort: 80,
+      Description: 'Frontend HTTP from ALB',
+      FromPort: 3100,
       IpProtocol: 'tcp',
       SourceSecurityGroupId: Match.anyValue(),
-      ToPort: 80,
+      ToPort: 3100,
+    });
+
+    template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
+      Description: 'Backend HTTP from ALB',
+      FromPort: 5100,
+      IpProtocol: 'tcp',
+      SourceSecurityGroupId: Match.anyValue(),
+      ToPort: 5100,
     });
 
     template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {

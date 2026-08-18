@@ -22,13 +22,14 @@ export class NetworkStack extends Stack {
 
     const appTier = new LoadBalancerConstruct(this, 'AppTier', {
       vpc: networking.vpc,
-      desiredCapacity: props.isProduction ? 2 : 2,
+      frontendDesiredCapacity: 1,
+      backendDesiredCapacity: 1,
       maxCapacity: props.isProduction ? 6 : 3,
     });
 
     new DatabaseConstruct(this, 'Databases', {
       vpc: networking.vpc,
-      appSecurityGroup: appTier.appSecurityGroup,
+      appSecurityGroup: appTier.backendSecurityGroup,
       backupRetentionDays: props.isProduction ? 30 : 7,
       deletionProtection: props.isProduction,
       removalPolicy: props.isProduction ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,

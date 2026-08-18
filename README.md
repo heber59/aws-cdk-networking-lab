@@ -6,7 +6,8 @@ Build a production-inspired AWS infrastructure lab using AWS CDK, GitHub Actions
 
 - A multi-AZ VPC per environment
 - Public subnets for the internet-facing Application Load Balancer and NAT Gateway
-- Private subnets for EC2 application nodes in an Auto Scaling Group
+- Private subnets for separate frontend and backend EC2 Auto Scaling Groups
+- ALB target routing to frontend port `3100` and backend port `5100`
 - Isolated database subnets for Aurora app data and a separate bunker database
 - Security groups that keep ALB, app, app DB, and bunker DB access separated
 - Development and production CDK stages

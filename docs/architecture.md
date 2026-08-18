@@ -13,7 +13,8 @@ Region A (primary)                            Region B (secondary)
 |  - ALB                               |        |  - ALB                               |
 |                                      |        |                                      |
 | Private subnet 10.10.2.0/24         |        | Private subnet 10.20.2.0/24         |
-|  - EC2 app nodes (ASG)               |        |  - EC2 app nodes (ASG)               |
+|  - EC2 frontend node (ASG, :3100)    |        |  - EC2 frontend node (ASG, :3100)    |
+|  - EC2 backend node (ASG, :5100)     |        |  - EC2 backend node (ASG, :5100)     |
 |  - Lambda ENI if VPC access needed    |        |  - Lambda ENI if VPC access needed    |
 |  - secret retrieval (SM)             |        |  - secret retrieval (SM)             |
 |                                      |        |                                      |
@@ -35,7 +36,7 @@ The design calls for 3 databases:
 
 1. One secure DB, called the "bunker" DB
 2. Two app databases, used by the application tier
-3. The app tier sits behind a load balancer
+3. The frontend and backend tiers sit behind a load balancer
 
 Recommended implementation:
 
@@ -58,7 +59,8 @@ Recommended implementation:
 
 ### Why this matches your requirement
 
-- The app EC2 nodes sit behind the ALB and connect privately to the app databases.
+- The backend EC2 nodes sit behind the ALB and connect privately to the app databases.
+- The frontend EC2 nodes serve the user interface and call the backend through the load balancer path routing.
 - The bunker DB is isolated from app traffic and is intended for sensitive admin-only data.
 - This pattern is easier to secure than having all databases in the same security group and route table.
 
@@ -94,7 +96,8 @@ The app subnets and DB subnets can route to each other inside the VPC, but acces
   - NAT Gateway
   - no DBs in this subnet
 - Private subnet:
-  - EC2 application nodes
+  - EC2 frontend node listening on port `3100`
+  - EC2 backend node listening on port `5100`
   - Lambda ENI (if Lambda needs VPC access)
 - Isolated DB subnet:
   - DBs with no direct internet ingress
@@ -114,15 +117,66 @@ That means you do not put API Gateway in a subnet. Instead, route API Gateway th
 ## 4. EC2 + load balancer pattern
 
 - Keep the EC2 instances in private subnets behind an ALB in public subnets.
-- Use an Auto Scaling Group with minimum=2 and desired=2 in each region.
+- Split the application into two private compute tiers:
+  - frontend EC2 Auto Scaling Group: minimum=1 and desired=1 per region
+  - backend EC2 Auto Scaling Group: minimum=1 and desired=1 per region
+- Run the frontend service on port `3100`.
+- Run the backend service on port `5100`.
+- Route default web traffic (`/*`) from the ALB to the frontend target group on `3100`.
+- Route API traffic (`/api/*`) from the ALB to the backend target group on `5100`.
 - Route53 routes users to the active regional ALB.
 - If one region fails, DNS failover or Route53 health checks send traffic to the secondary region.
 
 Recommended health checks:
 
-- ALB target group health check for app port
+- ALB frontend target group health check on `3100`
+- ALB backend target group health check on `5100`
 - Route53 health check for the public application endpoint
 - CloudWatch alarms tied to latency and failed requests
+
+### Docker runtime model
+
+The current CDK stack can be created before application code and AWS container registry credentials exist. That is useful for a lab because the networking, load balancer, EC2 instances, security groups, and databases can be validated first.
+
+When app code is ready, package the tiers separately:
+
+- Frontend image:
+  - build from the frontend Dockerfile
+  - expose container port `3100`
+  - run on the frontend EC2 instances
+  - ALB target group forwards to instance port `3100`
+- Backend image:
+  - build from the backend Dockerfile
+  - expose container port `5100`
+  - run on the backend EC2 instances
+  - ALB target group forwards to instance port `5100`
+
+Recommended deployment flow after AWS credentials are configured:
+
+```bash
+# Authenticate Docker to Amazon ECR.
+aws ecr get-login-password --region us-east-1 \
+  | docker login --username AWS --password-stdin ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
+
+# Build and push separate images.
+docker build -t frontend:latest ./frontend
+docker build -t backend:latest ./backend
+
+docker tag frontend:latest ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/frontend:latest
+docker tag backend:latest ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/backend:latest
+
+docker push ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/frontend:latest
+docker push ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/backend:latest
+```
+
+The EC2 user data or a later deployment pipeline should then pull the right image on the right tier:
+
+```bash
+docker run -d --name frontend --restart unless-stopped -p 3100:3100 frontend:latest
+docker run -d --name backend --restart unless-stopped -p 5100:5100 backend:latest
+```
+
+Until the AWS credentials and ECR repositories are available, the infrastructure can still be synthesized and tested locally. The sample EC2 user data serves basic health responses on the same ports so the ALB target groups have something to check.
 
 ## 5. Lambda use
 
@@ -171,17 +225,22 @@ Create a role like `DBAdminRole` with access to:
 ### ALB security group
 
 - inbound: 80/443 from `0.0.0.0/0`
-- outbound: allow to app EC2 port 8080/3000/etc.
+- outbound: allow to frontend EC2 port `3100` and backend EC2 port `5100`
 
-### EC2 app security group
+### EC2 frontend security group
 
-- inbound: from ALB security group only
+- inbound: port `3100` from ALB security group only
+- outbound: allow to the backend endpoint through the ALB or private service path
+
+### EC2 backend security group
+
+- inbound: port `5100` from ALB security group only
 - inbound: from VPC or private health-checks only if needed
 - outbound: allow to DB port and Secrets Manager / SSM endpoints
 
 ### DB security group
 
-- inbound: only from app EC2 security group
+- inbound: only from backend EC2 security group
 - inbound: only from DB admin or ETL Lambda security group if required
 - no public ingress
 
@@ -310,7 +369,8 @@ Then use tag-based IAM conditions to restrict deployments and database access.
 If this is a real production lab, use these defaults:
 
 - 2 AWS regions for active-active / active-passive architecture
-- 2 app EC2 nodes per region behind ALB
+- 1 frontend EC2 node per region behind ALB
+- 1 backend EC2 node per region behind ALB
 - 1 Aurora primary and one replica in the secondary region
 - 1 bunker DB with isolated SG and restricted DB-admin access
 - Route53 failover routing for higher availability
@@ -328,7 +388,7 @@ Before deploying, read [extra-configuration.md](extra-configuration.md) and conf
 - [ ] Route53 failover configuration
 - [ ] VPC endpoints for SSM and Secrets Manager
 - [ ] NAT Gateway and private routing
-- [ ] Security groups for ALB, EC2, and DB
+- [ ] Security groups for ALB, frontend EC2, backend EC2, and DB
 - [ ] CloudWatch alarms and budget alarms
 - [ ] Backup retention and restore process
 - [ ] DB admin and developer IAM policies with least privilege
@@ -338,7 +398,8 @@ Before deploying, read [extra-configuration.md](extra-configuration.md) and conf
 For your exact requirement, the cleanest AWS design is:
 
 - 2 regions
-- 2 app EC2 groups behind ALB
+- 1 frontend EC2 group behind ALB on port `3100`
+- 1 backend EC2 group behind ALB on port `5100`
 - 1 secure bunker DB in isolated private networking
 - 2 app databases or an Aurora cluster with cross-region replica support
 - API Gateway or ALB in front of application services
